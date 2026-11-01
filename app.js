@@ -1,16 +1,82 @@
 // Upbit WebSocket: https://docs.upbit.com/kr/reference/websocket-ticker
+// Upbit REST 캔들:  https://docs.upbit.com/kr/reference/list-candles-minutes
 const WS_URL = "wss://api.upbit.com/websocket/v1";
+const REST_URL = "https://api.upbit.com/v1/candles";
 const MARKET = "KRW-BTC";
-const MAX_POINTS = 120;
+const CANDLE_COUNT = 80;
 const MA_SHORT = 5;
 const MA_LONG = 20;
+const UP = "#ef4444";   // 한국 관례: 상승 = 빨강
+const DOWN = "#3b82f6"; // 하락 = 파랑
+
+// 차트 단위: 분봉은 minutes/{unit}, 일봉은 days
+const TIMEFRAMES = [
+  { label: "1분", path: "minutes/1", ms: 60e3 },
+  { label: "5분", path: "minutes/5", ms: 5 * 60e3 },
+  { label: "15분", path: "minutes/15", ms: 15 * 60e3 },
+  { label: "1시간", path: "minutes/60", ms: 60 * 60e3 },
+  { label: "일", path: "days", ms: 24 * 60 * 60e3 },
+];
 
 const $ = (id) => document.getElementById(id);
 const krw = new Intl.NumberFormat("ko-KR");
-const points = [];
+let candles = []; // 오래된 순 {t, o, h, l, c, v}
+let tf = TIMEFRAMES[0];
 let lastPrice = null;
 let retry = 0;
 
+/* ---------- 캔들 (REST) ---------- */
+async function loadCandles() {
+  const url = `${REST_URL}/${tf.path}?market=${MARKET}&count=${CANDLE_COUNT}`;
+  const mine = tf;
+  try {
+    const rows = await (await fetch(url)).json();
+    if (mine !== tf || !Array.isArray(rows)) return;
+    candles = rows.reverse().map((r) => ({
+      t: Date.parse(r.candle_date_time_utc + "Z"),
+      o: r.opening_price,
+      h: r.high_price,
+      l: r.low_price,
+      c: r.trade_price,
+      v: r.candle_acc_trade_volume,
+    }));
+    drawChart();
+  } catch (_) { /* 다음 주기에 재시도 */ }
+}
+
+// 실시간 체결가를 마지막 캔들에 반영하고, 새 구간이 시작되면 캔들을 추가
+function applyTick(price, ts, vol) {
+  if (!candles.length) return;
+  const start = Math.floor(ts / tf.ms) * tf.ms;
+  let last = candles[candles.length - 1];
+  if (start > last.t) {
+    last = { t: start, o: price, h: price, l: price, c: price, v: 0 };
+    candles.push(last);
+    if (candles.length > CANDLE_COUNT) candles.shift();
+  }
+  last.c = price;
+  last.h = Math.max(last.h, price);
+  last.l = Math.min(last.l, price);
+  last.v += vol || 0;
+}
+
+function buildTimeframeButtons() {
+  const box = $("tf");
+  TIMEFRAMES.forEach((x, i) => {
+    const b = document.createElement("button");
+    b.textContent = x.label;
+    b.className = i === 0 ? "active" : "";
+    b.onclick = () => {
+      tf = x;
+      candles = [];
+      [...box.children].forEach((el) => el.classList.toggle("active", el === b));
+      loadCandles();
+    };
+    box.appendChild(b);
+  });
+}
+
+/* ---------- 실시간 시세 (WebSocket) ---------- */
 function connect() {
   const ws = new WebSocket(WS_URL);
   ws.binaryType = "blob";
@@ -53,8 +119,7 @@ function render(t) {
   priceEl.textContent = krw.format(price) + " 원";
   priceEl.className = "price " + dir;
   if (lastPrice !== null && price !== lastPrice) {
-    const f = price > lastPrice ? "flash-up" : "flash-down";
-    priceEl.classList.add(f);
+    priceEl.classList.add(price > lastPrice ? "flash-up" : "flash-down");
   }
   lastPrice = price;
 
@@ -70,23 +135,83 @@ function render(t) {
   $("volume").textContent = t.acc_trade_volume_24h.toFixed(2) + " BTC";
   $("time").textContent = "최근 체결: " + new Date(t.trade_timestamp).toLocaleTimeString("ko-KR");
 
-  points.push(price);
-  if (points.length > MAX_POINTS) points.shift();
-  drawChart(dir);
+  applyTick(price, t.trade_timestamp, t.trade_volume);
+  drawChart();
 }
 
-function drawChart(dir) {
-  const c = $("chart");
-  const ctx = c.getContext("2d");
-  const { width: w, height: h } = c;
-  ctx.clearRect(0, 0, w, h);
-  if (points.length < 2) return;
-  const min = Math.min(...points), max = Math.max(...points);
-  const span = max - min || 1;
-  const X = (i) => (i / (MAX_POINTS - 1)) * w;
-  const Y = (p) => h - 8 - ((p - min) / span) * (h - 16);
+/* ---------- 차트 ---------- */
+// 종가 기준 단순 이동평균 (데이터가 n개 미만인 구간은 null)
+function movingAverage(n) {
+  let sum = 0;
+  return candles.map((k, i) => {
+    sum += k.c;
+    if (i >= n) sum -= candles[i - n].c;
+    return i >= n - 1 ? sum / n : null;
+  });
+}
 
-  const line = (series, color, width) => {
+function drawChart() {
+  const canvas = $("chart");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (candles.length < 2) return;
+
+  const axisW = 70;                 // 오른쪽 가격 눈금 영역
+  const volH = h * 0.18;            // 아래쪽 거래량 영역
+  const top = 8, bottom = h - volH - 6;
+  const plotW = w - axisW;
+
+  let min = Math.min(...candles.map((k) => k.l));
+  let max = Math.max(...candles.map((k) => k.h));
+  const pad = (max - min || 1) * 0.05;
+  min -= pad; max += pad;
+  const Y = (p) => top + (1 - (p - min) / (max - min)) * (bottom - top);
+  const slot = plotW / CANDLE_COUNT;
+  const X = (i) => (i + 0.5) * slot;
+  const bodyW = Math.max(1, slot * 0.7);
+
+  // 가로 눈금선 + 가격 라벨
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (let g = 0; g <= 4; g++) {
+    const p = min + ((max - min) * g) / 4;
+    const y = Y(p);
+    ctx.strokeStyle = "rgba(255,255,255,.06)";
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotW, y); ctx.stroke();
+    ctx.fillStyle = "#8b93a5";
+    ctx.fillText(krw.format(Math.round(p)), plotW + 6, y);
+  }
+
+  // 거래량 막대
+  const maxV = Math.max(...candles.map((k) => k.v)) || 1;
+  candles.forEach((k, i) => {
+    const vh = (k.v / maxV) * volH;
+    ctx.fillStyle = (k.c >= k.o ? UP : DOWN) + "66";
+    ctx.fillRect(X(i) - bodyW / 2, h - vh, bodyW, vh);
+  });
+
+  // 캔들 (꼬리 + 몸통)
+  candles.forEach((k, i) => {
+    const color = k.c >= k.o ? UP : DOWN;
+    const x = X(i);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, Y(k.h)); ctx.lineTo(x, Y(k.l)); ctx.stroke();
+    const yo = Y(k.o), yc = Y(k.c);
+    ctx.fillRect(x - bodyW / 2, Math.min(yo, yc), bodyW, Math.max(1, Math.abs(yo - yc)));
+  });
+
+  // 이동평균선
+  const line = (series, color) => {
     ctx.beginPath();
     let started = false;
     series.forEach((p, i) => {
@@ -95,23 +220,22 @@ function drawChart(dir) {
       started = true;
     });
     ctx.strokeStyle = color;
-    ctx.lineWidth = width;
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   };
+  line(movingAverage(MA_SHORT), "#facc15");
+  line(movingAverage(MA_LONG), "#a78bfa");
 
-  line(points, dir === "down" ? "#3b82f6" : dir === "up" ? "#ef4444" : "#8b93a5", 2);
-  line(movingAverage(MA_SHORT), "#facc15", 1.5);
-  line(movingAverage(MA_LONG), "#a78bfa", 1.5);
+  // 현재가 점선
+  const cy = Y(candles[candles.length - 1].c);
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = "#8b93a5";
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(plotW, cy); ctx.stroke();
+  ctx.setLineDash([]);
 }
 
-// 최근 n개 체결가의 단순 이동평균 (데이터가 n개 미만인 구간은 null)
-function movingAverage(n) {
-  let sum = 0;
-  return points.map((p, i) => {
-    sum += p;
-    if (i >= n) sum -= points[i - n];
-    return i >= n - 1 ? sum / n : null;
-  });
-}
-
+buildTimeframeButtons();
+loadCandles();
+setInterval(loadCandles, 30000); // 실시간 반영분을 서버 캔들로 주기적 보정
+window.addEventListener("resize", drawChart);
 connect();
