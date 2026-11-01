@@ -2,6 +2,8 @@
 const WS_URL = "wss://api.upbit.com/websocket/v1";
 const MARKET = "KRW-BTC";
 const MAX_POINTS = 120;
+const MA_SHORT = 5;
+const MA_LONG = 20;
 
 const $ = (id) => document.getElementById(id);
 const krw = new Intl.NumberFormat("ko-KR");
@@ -81,15 +83,35 @@ function drawChart(dir) {
   if (points.length < 2) return;
   const min = Math.min(...points), max = Math.max(...points);
   const span = max - min || 1;
-  ctx.beginPath();
-  points.forEach((p, i) => {
-    const x = (i / (MAX_POINTS - 1)) * w;
-    const y = h - 8 - ((p - min) / span) * (h - 16);
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  const X = (i) => (i / (MAX_POINTS - 1)) * w;
+  const Y = (p) => h - 8 - ((p - min) / span) * (h - 16);
+
+  const line = (series, color, width) => {
+    ctx.beginPath();
+    let started = false;
+    series.forEach((p, i) => {
+      if (p === null) return;
+      started ? ctx.lineTo(X(i), Y(p)) : ctx.moveTo(X(i), Y(p));
+      started = true;
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  };
+
+  line(points, dir === "down" ? "#3b82f6" : dir === "up" ? "#ef4444" : "#8b93a5", 2);
+  line(movingAverage(MA_SHORT), "#facc15", 1.5);
+  line(movingAverage(MA_LONG), "#a78bfa", 1.5);
+}
+
+// 최근 n개 체결가의 단순 이동평균 (데이터가 n개 미만인 구간은 null)
+function movingAverage(n) {
+  let sum = 0;
+  return points.map((p, i) => {
+    sum += p;
+    if (i >= n) sum -= points[i - n];
+    return i >= n - 1 ? sum / n : null;
   });
-  ctx.strokeStyle = dir === "down" ? "#3b82f6" : dir === "up" ? "#ef4444" : "#8b93a5";
-  ctx.lineWidth = 2;
-  ctx.stroke();
 }
 
 connect();
