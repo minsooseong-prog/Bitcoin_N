@@ -184,7 +184,7 @@ function drawChart() {
   let min = Math.min(...candles.map((k) => k.l));
   let max = Math.max(...candles.map((k) => k.h));
   const pad = (max - min || 1) * 0.05;
-  min -= pad; max += pad;
+  min = Math.max(0, min - pad); max += pad;
   const Y = (p) => top + (1 - (p - min) / (max - min)) * (bottom - top);
   const slot = plotW / CANDLE_COUNT;
   const X = (i) => (i + 0.5) * slot;
