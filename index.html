@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>실시간 비트코인 시세</title>
+<meta name="description" content="업비트 WebSocket API 기반 실시간 비트코인(BTC/KRW) 시세">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="card">
+  <header>
+    <h1>₿ 비트코인 <span class="pair">BTC/KRW</span></h1>
+    <span id="status" class="status off">연결 중…</span>
+  </header>
+
+  <div id="price" class="price">-</div>
+  <div id="change" class="change">-</div>
+
+  <canvas id="chart" width="600" height="160"></canvas>
+
+  <dl class="stats">
+    <div><dt>고가 (당일)</dt><dd id="high">-</dd></div>
+    <div><dt>저가 (당일)</dt><dd id="low">-</dd></div>
+    <div><dt>24h 거래대금</dt><dd id="value">-</dd></div>
+    <div><dt>24h 거래량</dt><dd id="volume">-</dd></div>
+  </dl>
+
+  <footer>
+    <span id="time">-</span>
+    <span>데이터 출처: <a href="https://docs.upbit.com/kr/reference/api-overview" target="_blank" rel="noopener">Upbit Open API</a></span>
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
