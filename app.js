@@ -16,7 +16,18 @@ const TIMEFRAMES = [
   { label: "15분", path: "minutes/15", ms: 15 * 60e3 },
   { label: "1시간", path: "minutes/60", ms: 60 * 60e3 },
   { label: "일", path: "days", ms: 24 * 60 * 60e3 },
+  { label: "주", path: "weeks", ms: 7 * 24 * 60 * 60e3 },
+  { label: "월", path: "months", month: true },
 ];
+
+// 캔들 시작 시각 t 다음 구간의 시작 시각 (월봉은 달마다 길이가 다름)
+function nextStart(t) {
+  if (tf.month) {
+    const d = new Date(t);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  }
+  return t + tf.ms;
+}
 
 const $ = (id) => document.getElementById(id);
 const krw = new Intl.NumberFormat("ko-KR");
@@ -47,9 +58,11 @@ async function loadCandles() {
 // 실시간 체결가를 마지막 캔들에 반영하고, 새 구간이 시작되면 캔들을 추가
 function applyTick(price, ts, vol) {
   if (!candles.length) return;
-  const start = Math.floor(ts / tf.ms) * tf.ms;
   let last = candles[candles.length - 1];
-  if (start > last.t) {
+  if (ts >= nextStart(last.t)) {
+    // 서버 캔들 기준으로 구간 경계를 따라가 체결 시각이 속한 구간을 찾는다
+    let start = nextStart(last.t);
+    while (nextStart(start) <= ts) start = nextStart(start);
     last = { t: start, o: price, h: price, l: price, c: price, v: 0 };
     candles.push(last);
     if (candles.length > CANDLE_COUNT) candles.shift();
