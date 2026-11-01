@@ -245,6 +245,67 @@ function drawChart() {
   ctx.strokeStyle = "#8b93a5";
   ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(plotW, cy); ctx.stroke();
   ctx.setLineDash([]);
+
+  updateSignal();
+}
+
+/* ---------- 매수/매도 신호 (참고용) ---------- */
+const RSI_PERIOD = 14;
+
+// Wilder 방식 RSI. 데이터가 부족하면 null
+function rsi() {
+  if (candles.length <= RSI_PERIOD) return null;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= RSI_PERIOD; i++) {
+    const d = candles[i].c - candles[i - 1].c;
+    d >= 0 ? (gain += d) : (loss -= d);
+  }
+  gain /= RSI_PERIOD; loss /= RSI_PERIOD;
+  for (let i = RSI_PERIOD + 1; i < candles.length; i++) {
+    const d = candles[i].c - candles[i - 1].c;
+    gain = (gain * (RSI_PERIOD - 1) + Math.max(d, 0)) / RSI_PERIOD;
+    loss = (loss * (RSI_PERIOD - 1) + Math.max(-d, 0)) / RSI_PERIOD;
+  }
+  return loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+}
+
+function updateSignal() {
+  const short = movingAverage(MA_SHORT), long = movingAverage(MA_LONG);
+  const n = candles.length - 1;
+  if (short[n] === null || long[n] === null) return;
+
+  let score = 0;
+  const reasons = [];
+
+  // 1) 추세: 단기선이 장기선 위/아래
+  if (short[n] > long[n]) { score += 1; reasons.push(`MA${MA_SHORT}가 MA${MA_LONG} 위에 있음 (상승 추세) +1`); }
+  else { score -= 1; reasons.push(`MA${MA_SHORT}가 MA${MA_LONG} 아래에 있음 (하락 추세) -1`); }
+
+  // 2) 최근 3개 봉 안에 교차가 있었는지
+  let cross = 0;
+  for (let i = Math.max(1, n - 2); i <= n; i++) {
+    if (long[i - 1] === null) continue;
+    const before = short[i - 1] - long[i - 1], now = short[i] - long[i];
+    if (before <= 0 && now > 0) cross = 1;
+    else if (before >= 0 && now < 0) cross = -1;
+  }
+  if (cross === 1) { score += 1; reasons.push("최근 골든크로스 발생 +1"); }
+  else if (cross === -1) { score -= 1; reasons.push("최근 데드크로스 발생 -1"); }
+
+  // 3) RSI 과매수/과매도
+  const r = rsi();
+  if (r !== null) {
+    if (r < 30) { score += 1; reasons.push(`RSI ${r.toFixed(1)} — 과매도 구간 +1`); }
+    else if (r > 70) { score -= 1; reasons.push(`RSI ${r.toFixed(1)} — 과매수 구간 -1`); }
+    else reasons.push(`RSI ${r.toFixed(1)} — 중립 구간 0`);
+  }
+
+  const [text, cls] = score >= 2 ? ["매수 우위", "buy"] : score <= -2 ? ["매도 우위", "sell"] : ["관망", "neutral"];
+  const badge = $("signal-badge");
+  badge.textContent = text;
+  badge.className = "badge " + cls;
+  $("signal-tf").textContent = `(${tf.label}봉 기준)`;
+  $("signal-reasons").innerHTML = reasons.map((s) => `<li>${s}</li>`).join("");
 }
 
 buildTimeframeButtons();
